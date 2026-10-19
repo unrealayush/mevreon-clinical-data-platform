@@ -146,7 +146,7 @@ const ThemeProvider = ({ children }) => {
 // ═══════════════════════════════════════════════════════════════
 
 const CONFIG = {
-  region: "us-east-1",
+  region: "us-central1",
     buckets: {
     RAW: "mevreon-raw-gcp",
     STAGING: "mevreon-staging-gcp",

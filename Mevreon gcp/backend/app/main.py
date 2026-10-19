@@ -81,9 +81,9 @@ def me(u=Depends(_user_dep)):
 # ── Storage (S3-shaped) ───────────────────────────────────────────────────
 @app.get("/api/storage/list")
 def api_list(bucket: str, prefix: str = "", delimiter: str = None, max_keys: int = None,
-             u=Depends(_user_dep)):
+             continuation_token: str = None, u=Depends(_user_dep)):
     try:
-        return storage.list_objects(bucket, prefix, delimiter, max_keys)
+        return storage.list_objects(bucket, prefix, delimiter, max_keys, continuation_token=continuation_token)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

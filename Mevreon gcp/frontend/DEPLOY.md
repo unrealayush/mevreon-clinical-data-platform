@@ -1,17 +1,17 @@
-# Deploy to AWS App Runner
+# Deploy Frontend to Google Cloud Run
 
-Required GitHub repository secrets:
-- AWS_ACCESS_KEY_ID
-- AWS_SECRET_ACCESS_KEY
-- AWS_REGION (e.g. us-east-1)
-- AWS_ACCOUNT_ID
-- ECR_REPOSITORY (e.g. mevreon-frontend)
-- APPRUNNER_SERVICE_NAME (e.g. mevreon-front)
+To build and deploy the frontend container to Google Cloud Run:
 
-Workflow:
-1. Push to main → GitHub Action builds Docker image, pushes to ECR, then creates/updates App Runner service.
+```bash
+cd "Mevreon gcp"
 
-Local deploy (for testing):
-1. Build & push to ECR manually.
-2. Run:
-   IMAGE_TAG=your_tag AWS_REGION=... AWS_ACCOUNT_ID=... ECR_REPOSITORY=... APPRUNNER_SERVICE_NAME=... ./deploy/apprunner-deploy.sh
+# Build and deploy frontend to Cloud Run
+./deploy/gcp.sh build-frontend
+./deploy/gcp.sh deploy-frontend
+```
+
+This will automatically:
+1. Detect the active Cloud Run backend URL.
+2. Inject `VITE_API_BASE` into `.env.production`.
+3. Submit the build to Google Cloud Build.
+4. Deploy to Cloud Run service `mevreon-gcp-frontend` in `us-central1`.

@@ -200,7 +200,7 @@ def emit_run_status(run_id, status, stages=None, error=None):
     """Write a per-run status doc the gateway reads for GET /api/runs/{id}/status."""
     doc = {"runId": run_id, "status": status,
            "stages": stages or {},
-           "completedAt": M.datetime.datetime.utcnow().isoformat() + "Z"}
+           "completedAt": M.datetime.datetime.now(M.datetime.timezone.utc).isoformat()}
     if error:
         doc["error"] = str(error)[:500]
     try:

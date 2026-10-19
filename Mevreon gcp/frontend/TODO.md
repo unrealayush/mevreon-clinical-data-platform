@@ -1,15 +1,18 @@
-# Mevreon Platform Frontend Development Plan
+# Mevreon Platform Development Status & Roadmap
 
-## Overview
-Create a comprehensive React-based frontend (~3000 lines) for BatchPipeline with folder upload, pipeline triggering, longitudinal summaries, agent tabs, JSON viewers, and extensive animations/UI polish.
+## Architecture Milestones
+- [x] Multimodal ingestion pipeline (DICOM, PDF, VCF, DOCX, XLSX, OCR)
+- [x] Deterministic physiological bounds engine (`validate_lab_value` for 40+ tests)
+- [x] Ontological cleaning (RxNorm, LOINC, ICD-10, SNOMED CT)
+- [x] Grounded evidence highlighting (PDF receipts with bounding box highlights)
+- [x] GCP migration (FastAPI gateway, Cloud Run Jobs, Vertex AI Gemini, GCS buckets)
+- [x] GCP S3-compatibility shim (`gcpStorage.js`) for seamless React UI communication
+- [x] Cloud Run deployment (frontend + backend live in `us-central1`)
+- [x] Storage pagination & token continuation support
+- [x] Fix monolith entrypoint in `run_monolith.sh`
 
-## Steps
-- [x] Install additional dependencies (framer-motion, react-syntax-highlighter, etc.)
-- [x] Create core components: UploadModal, PipelineProgress, AgentTabs, NarrativeViewer, JsonViewer, CaseCard
-- [ ] Expand App.jsx with state management for pipeline runs, cases, agents
-- [ ] Integrate AWS SDK for S3 uploads, Step Functions invocation, polling
-- [ ] Add animations and transitions using Framer Motion
-- [ ] Implement detailed agent stage views with JSON rendering
-- [ ] Add error handling, loading states, real-time updates
-- [ ] Polish UI with gradients, shadows, icons, responsive design
-- [ ] Test integration with BatchPipeline backend
+## Next Phase Engineering
+- [ ] Refactor 11,000-line `App.jsx` into modular domain components (`pages/`, `features/`)
+- [ ] Migrate in-memory user authentication store to Cloud SQL / Firebase Auth
+- [ ] Migrate plaintext API keys to Google Cloud Secret Manager
+- [ ] Consolidate or prune unused legacy components (`components/AgentTabs.jsx`, etc.)

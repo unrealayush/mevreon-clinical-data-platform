@@ -4,4 +4,4 @@
 # per-run from POST /api/runs.
 set -euo pipefail
 cd /app
-exec python -m pipeline.monolith --stage "${STAGE:-FULL_PIPELINE}" --run_id "${RUN_ID:-no-run-id}"
+exec python -m pipeline.run

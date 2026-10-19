@@ -29,27 +29,29 @@ def _resolve_bucket(name_or_alias: str) -> str:
     return name_or_alias
 
 
-def list_objects(bucket, prefix="", delimiter=None, max_keys=None) -> dict:
+def list_objects(bucket, prefix="", delimiter=None, max_keys=None, continuation_token=None) -> dict:
     b = client().bucket(_resolve_bucket(bucket))
-    blobs = list(b.list_blobs(prefix=prefix or None, delimiter=delimiter,
-                              max_results=max_keys))
-    contents = [{"Key": x.name, "Size": x.size,
-                 "LastModified": x.updated.isoformat()} for x in blobs]
+    it = b.list_blobs(
+        prefix=prefix or None,
+        delimiter=delimiter or None,
+        max_results=max_keys,
+        page_token=continuation_token or None,
+    )
+    blobs = list(it)
+    contents = [{
+        "Key": x.name,
+        "Size": x.size,
+        "LastModified": x.updated.isoformat() if x.updated else ""
+    } for x in blobs]
 
-    # common (sub)prefixes only meaningful with a delimiter
-    common = []
-    if delimiter:
-        # list_blobs already filters; to get real "folders" re-query pages
-        it = b.list_blobs(prefix=prefix or None, delimiter=delimiter, max_results=max_keys)
-        for page in it.pages:
-            for p in page.prefixes:
-                common.append({"Prefix": p})
+    common = [{"Prefix": p} for p in sorted(it.prefixes or [])]
+    next_token = getattr(it, "next_page_token", None)
 
     return {
         "Contents": contents,
         "CommonPrefixes": common,
-        "IsTruncated": False,
-        "NextContinuationToken": None,
+        "IsTruncated": bool(next_token),
+        "NextContinuationToken": next_token,
         "KeyCount": len(contents),
     }
 

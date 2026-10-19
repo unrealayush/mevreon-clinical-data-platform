@@ -44,7 +44,8 @@ def read_status(run_id: str) -> dict:
 
 
 def create_run(case_id: str, stage: str = "FULL_PIPELINE") -> dict:
-    run_id = f"run-{datetime.datetime.utcnow().strftime('%Y%m%d')}-{uuid.uuid4().hex[:8]}"
+    now = datetime.datetime.now(datetime.timezone.utc)
+    run_id = f"run-{now.strftime('%Y%m%d')}-{uuid.uuid4().hex[:8]}"
     case_folder = case_id.replace(" ", "+")  # match frontend S3 key encoding
 
     write_status(run_id, {
@@ -52,7 +53,7 @@ def create_run(case_id: str, stage: str = "FULL_PIPELINE") -> dict:
         "folder": case_folder,
         "status": "SUBMITTED",
         "stage": stage,
-        "startedAt": datetime.datetime.utcnow().isoformat() + "Z",
+        "startedAt": now.isoformat(),
         "stages": {},
     })
 
