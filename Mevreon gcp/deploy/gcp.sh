@@ -11,7 +11,7 @@ REGION="${REGION:-us-central1}"
 BACKEND_IMG="$REGION-docker.pkg.dev/$PROJECT/mevreon/mevreon-gcp-backend"
 FRONTEND_IMG="$REGION-docker.pkg.dev/$PROJECT/mevreon/mevreon-gcp-frontend"
 BUCKETS="mevreon-raw-gcp mevreon-staging-gcp mevreon-processed-gcp mevreon-curated-gcp mevreon-memory-gcp mevreon-quarantine-gcp"
-VERTEX_MODEL="${VERTEX_MODEL:-gemini-2.0-flash-001}"
+VERTEX_MODEL="${VERTEX_MODEL:-gemini-2.5-pro}"
 JWT_SECRET="${JWT_SECRET:-dev-secret-change-me-$(date +%s)}"
 export PROJECT REGION BACKEND_IMG FRONTEND_IMG VERTEX_MODEL JWT_SECRET
 

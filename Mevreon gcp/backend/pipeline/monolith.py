@@ -1414,9 +1414,10 @@ Absolute rules:
 5. Do NOT interpret, summarize, diagnose, or add any commentary. Output ONLY the raw transcribed text.
 6. If multiple pages/images are provided, clearly separate each with "--- PAGE N ---" markers.
 7. For medical forms, preserve field labels and their values as "Label: Value" pairs.
-8. For tables (lab results, medication lists, etc.), use markdown table format with proper column headers.
+8. For tables (lab results, medication lists, etc.), use markdown table format with proper column headers. Transcribe every single row and column from every page without abbreviating with '...' or omitting rows.
 9. Preserve abbreviations exactly: mg, mL, BID, PRN, etc. Do not expand them.
-10. For partially illegible text, provide your best guess in brackets: [illegible] or [possible: word]."""
+10. For partially illegible text, provide your best guess in brackets: [illegible] or [possible: word].
+11. For multi-column lab reports and pathology tests, preserve Test Name | Observed Value | Unit | Biological Reference Interval | Status columns completely. Transcribe every numerical value verbatim."""
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -2828,6 +2829,10 @@ OUTPUT JSON:
     "summary": {"total_checks": 0, "passed": 0, "warnings": 0, "critical": 0}
 }
 
+CRITICAL VALIDATED_DATA RULES:
+- Never replace or abbreviate arrays in validated_data with string placeholders like "[...tests as provided...]".
+- Either leave validated_data as {} for automated verified entity inheritance, or retain all entity rows completely.
+
 Return ONLY valid JSON. BEGIN NOW."""
 
 
@@ -2853,9 +2858,17 @@ class ValidationAgent:
             result["system_meta"] = meta
             result["system_meta"]["stage"] = "VALIDATION"
             # Inject demographics into validated_data so FeatureAgent can always find them
-            if carried_demographics:
-                vd = result.setdefault("validated_data", {})
-                if isinstance(vd, dict) and not vd.get("demographics"):
+            vd = result.setdefault("validated_data", dict(std_data))
+            if isinstance(vd, dict):
+                for cat in ("medications", "conditions", "diseases", "lab_tests", "vital_signs", "allergies", "imaging_findings", "procedures", "genomic_data"):
+                    std_val = std_data.get(cat)
+                    vd_val = vd.get(cat)
+                    if isinstance(std_val, list) and len(std_val) > 0:
+                        if not isinstance(vd_val, list) or len(vd_val) == 0:
+                            vd[cat] = std_val
+                    elif cat in std_data and not vd.get(cat):
+                        vd[cat] = std_data[cat]
+                if carried_demographics and not vd.get("demographics"):
                     vd["demographics"] = carried_demographics
                     print(f"[VALIDATION] Injected demographics into validated_data: age={carried_demographics.get('age')} gender={carried_demographics.get('gender')}", flush=True)
 
@@ -4087,6 +4100,7 @@ Return ONLY valid JSON. Be PRECISE — only flag TRUE inventions, not paraphrase
                 "trending_abnormal_labs": _lab_summary.get("trending_abnormal", []),
                 "key_lab_values": _lab_summary.get("key_values", []),
                 "panels_summary": _lab_summary.get("panels_summary", ""),
+                "lab_tests": (validated.get("lab_tests") if isinstance(validated, dict) and isinstance(validated.get("lab_tests"), list) else []) or [],
 
                 # ── Imaging (enhanced for DICOM) ──
                 "imaging_summary": _imaging,
@@ -5062,6 +5076,16 @@ ABSOLUTE RULES:
 - **NEVER omit symptoms**: if a note describes a symptom or complaint, it MUST appear in diseases[] or an equivalent structured field.
 - For scanned PDFs and images, read the pixels: tables, prescription pads, discharge handwrites, and annotation margins all count as data.
 - **MANDATORY MEDICATION SELF-AUDIT before returning**: re-scan every file one final time. If ANY drug name, prescription, "tabs/caps/mg/od/bd/tds/hs" abbreviation, or medication schedule is visible anywhere and is missing from that file's medications[], add it now. An image of a prescription pad with medications:[] is ALWAYS wrong.
+- **EXHAUSTIVE MULTI-PAGE LABORATORY AND BIOCHEMISTRY EXTRACTION**:
+  * For multi-page lab reports, blood panels, and pathology reports (such as CBC/Hemogram, Glycated Hemoglobin/HbA1c, Fasting Glucose, Post-Prandial Glucose, Estimated Average Glucose eAG, Lipid Profile, Liver Function, Kidney Function, Electrolytes, Urinalysis): extract EVERY SINGLE ANALYTE test result row without truncation. Do NOT omit or summarize any test.
+  * Every row must populate lab_tests[] with:
+    - test_name: Exact complete test name (e.g. "Haemoglobin (Hb)", "Erythrocyte (RBC) Count", "PCV (Packed Cell Volume)", "MCV (Mean Corpuscular Volume)", "MCH (Mean Corpuscular Hb)", "MCHC (Mean Corpuscular Hb Concn.)", "RDW (Red Cell Distribution Width)", "PDW (Platelet Distribution Width)", "HbA1c- Glycated Haemoglobin", "Estimated Average Glucose (eAG)", "Glucose Fasting", "Nitrite (Urine)", "Pus cells (WBCs) (Urine)", "Bacteria (Urine)", "Red blood cells (Urine)")
+    - value: Exact verbatim value (e.g. "12.3", "7.5", "168.55", "3.58", "36.2", "116", "Positive", "63.2", "213.8", "Absent")
+    - units: Exact printed unit of measurement (e.g. "gm/dL", "%", "mg/dL", "mill/cu.mm", "fL", "pg", "/hpf")
+    - ref_range: Full biological reference interval printed on the document (e.g. "14-18", "<= 5.6", "0-5", "Normal: 70-99", "11.5-14.0")
+    - abnormal: Strict flag based on reference interval: "L" (Low), "H" (High), "LL" (Critical Low), "HH" (Critical High), "N" (Normal)
+    - evidence: {"source_sentence": "<exact text line>", "page": <page number>, "document": "<filename>"}
+  * Scan through every page (Page 1 through Page 14+). An 8-page or 14-page diagnostic report with only 5 lab tests in lab_tests:[] is ALWAYS a failure.
 
 DICOM / IMAGING EXTRACTION RULES:
 - For each DICOM image, populate imaging_findings with:
@@ -6304,10 +6328,19 @@ class BatchValidationAgent:
 
             result["system_meta"] = dict(meta)
             result["system_meta"]["stage"] = "BATCH_VALIDATION"
-            # Ensure validated_data contains demographics for FeatureAgent
+            # Ensure validated_data contains all entities from std_data for FeatureAgent
             vd = result.setdefault("validated_data", dict(std_data))
-            if isinstance(vd, dict) and not vd.get("demographics"):
-                vd["demographics"] = meta.get("demographics", {})
+            if isinstance(vd, dict):
+                for cat in ("medications", "conditions", "diseases", "lab_tests", "vital_signs", "allergies", "imaging_findings", "procedures", "genomic_data"):
+                    std_val = std_data.get(cat)
+                    vd_val = vd.get(cat)
+                    if isinstance(std_val, list) and len(std_val) > 0:
+                        if not isinstance(vd_val, list) or len(vd_val) == 0:
+                            vd[cat] = std_val
+                    elif cat in std_data and not vd.get(cat):
+                        vd[cat] = std_data[cat]
+                if not vd.get("demographics"):
+                    vd["demographics"] = meta.get("demographics", {})
 
             out   = f"runs/{run_id}/batch_validation_output.json"
             named = f"runs/{run_id}__{safe_case}/03_BATCH_VALIDATION.json"

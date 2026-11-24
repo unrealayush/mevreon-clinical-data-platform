@@ -29,12 +29,24 @@ def _final_result_from_log(out):
     return None
 
 
+class Tee(io.StringIO):
+    def __init__(self, target):
+        super().__init__()
+        self.target = target
+    def write(self, s):
+        self.target.write(s)
+        self.target.flush()
+        return super().write(s)
+    def flush(self):
+        self.target.flush()
+        return super().flush()
+
 def main():
     run_id = os.environ.get("RUN_ID", "no-run-id")
     stage = os.environ.get("STAGE", "FULL_PIPELINE")
     # monolith.main() runs its own argparse and requires --stage; feed it argv.
     sys.argv = [sys.argv[0], "--stage", stage, "--run_id", run_id]
-    buf = io.StringIO()
+    buf = Tee(sys.stdout)
     try:
         with contextlib.redirect_stdout(buf):
             M.main()
@@ -45,15 +57,12 @@ def main():
                 run_id, result.get("status", "SUCCESS"), result.get("stages", {}))
         else:
             gcp_adapters.emit_run_status(run_id, "SUCCESS", {})
-        sys.stdout.write(out); sys.stdout.flush()
     except SystemExit as e:
         gcp_adapters.emit_run_status(run_id, "FAILED", {})
-        sys.stdout.write(buf.getvalue()); sys.stdout.flush()
         if e.code:
             raise
     except Exception as e:
         gcp_adapters.emit_run_status(run_id, "FAILED", {}, error=e)
-        sys.stdout.write(buf.getvalue()); sys.stdout.flush()
         raise
 
 

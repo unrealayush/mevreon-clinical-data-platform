@@ -38,6 +38,7 @@ import { twMerge } from 'tailwind-merge';
 import PipelineLanding from './pages/PipelineLanding.jsx';
 import EvidenceViewer from './components/EvidenceViewer.jsx';
 import MedicationsPanel from './components/MedicationsPanel.jsx';
+import LabsPanel from './components/LabsPanel.jsx';
 import { format, formatDistanceToNow, parseISO, isValid } from 'date-fns';
 import {
   ResponsiveContainer,
@@ -1142,29 +1143,85 @@ const PipelineFileViewer = ({ caseData, s3Client, theme }) => {
     const safeName = safeFileName(file.name);
     const results = {};
 
+    const caseId = caseData?.id || '';
+    const safeCase = safeFileName(caseId);
+    let runIds = Object.keys(caseData?.runs || {});
+    if (caseData?.files) {
+      Object.values(caseData.files).forEach(f => {
+        if (f.runId && !runIds.includes(f.runId)) runIds.push(f.runId);
+      });
+    }
+    runIds.sort().reverse();
+
+    if (runIds.length === 0 && s3Client) {
+      try {
+        const resp = await s3Client.send(new ListObjectsV2Command({
+          Bucket: CONFIG.buckets.STAGING,
+          Prefix: 'runs/',
+          Delimiter: '/'
+        }));
+        const prefixes = (resp.CommonPrefixes || []).map(p => p.Prefix?.replace('runs/', '').replace('/', ''));
+        runIds = prefixes.filter(p => p && p.startsWith('run-')).sort().reverse();
+      } catch {}
+    }
+
     for (const agent of CONFIG.agents) {
+      let loaded = false;
       const outputs = agentOutputs[agent.id] || [];
-      if (outputs.length === 0) continue;
       
       // Multi-level matching: exact → partial name → combined output (no sourceFileName) → first
-      const match = outputs.find(o => o.sourceFileName && o.sourceFileName === safeName) ||
-                    outputs.find(o => o.sourceFileName && safeName && (
+      const validOutputs = outputs.filter(o => o.key && o.key !== '_inferred_');
+      const match = validOutputs.find(o => o.sourceFileName && o.sourceFileName === safeName) ||
+                    validOutputs.find(o => o.sourceFileName && safeName && (
                       o.sourceFileName.includes(safeName) || safeName.includes(o.sourceFileName)
                     )) ||
-                    outputs.find(o => !o.sourceFileName || o.sourceFileName === '') ||
-                    (outputs.length === 1 ? outputs[0] : null) ||
-                    outputs[0];
+                    validOutputs.find(o => !o.sourceFileName || o.sourceFileName === '') ||
+                    (validOutputs.length === 1 ? validOutputs[0] : null) ||
+                    validOutputs[0];
 
       if (match && s3Client) {
-        // Use correct bucket per agent stage: ingestion→STAGING, cleaning/validation→PROCESSED
         const agentBucket = match.bucket || CONFIG.buckets[agent.bucket] || CONFIG.buckets.PROCESSED;
         try {
           const resp = await s3Client.send(new GetObjectCommand({ Bucket: agentBucket, Key: match.key }));
           const content = await resp.Body.transformToString();
           const parsed = safeParseJSON(content, content);
           results[agent.id] = { name: match.name, data: parsed, raw: typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2), size: match.size, lastModified: match.lastModified };
+          loaded = true;
         } catch (e) {
-          results[agent.id] = { name: match.name, error: e.message };
+          // Fall through to direct candidate key lookup
+        }
+      }
+
+      // If not loaded from agentOutputs match, try direct candidate keys in GCS/S3
+      if (!loaded && s3Client) {
+        const candidateKeys = [];
+        for (const r of runIds) {
+          if (agent.id === 'ingestion') {
+            candidateKeys.push({ bucket: CONFIG.buckets.STAGING, key: `runs/${r}__${safeCase}__${safeName}/01_INGESTION.json`, name: '01_INGESTION.json' });
+            candidateKeys.push({ bucket: CONFIG.buckets.STAGING, key: `runs/${r}/ingestion_${safeName}.json`, name: `ingestion_${safeName}.json` });
+          } else if (agent.id === 'cleaning') {
+            candidateKeys.push({ bucket: CONFIG.buckets.PROCESSED, key: `runs/${r}__${safeCase}__${safeName}/02_BATCH_CLEANING.json`, name: '02_BATCH_CLEANING.json' });
+            candidateKeys.push({ bucket: CONFIG.buckets.PROCESSED, key: `runs/${r}/batch_cleaning_output.json`, name: 'batch_cleaning_output.json' });
+            candidateKeys.push({ bucket: CONFIG.buckets.PROCESSED, key: `runs/${r}__${safeCase}/02_BATCH_CLEANING.json`, name: '02_BATCH_CLEANING.json' });
+          } else if (agent.id === 'validation') {
+            candidateKeys.push({ bucket: CONFIG.buckets.PROCESSED, key: `runs/${r}__${safeCase}__${safeName}/03_BATCH_VALIDATION.json`, name: '03_BATCH_VALIDATION.json' });
+            candidateKeys.push({ bucket: CONFIG.buckets.PROCESSED, key: `runs/${r}/batch_validation_output.json`, name: 'batch_validation_output.json' });
+            candidateKeys.push({ bucket: CONFIG.buckets.PROCESSED, key: `runs/${r}__${safeCase}/03_BATCH_VALIDATION.json`, name: '03_BATCH_VALIDATION.json' });
+          } else if (agent.id === 'feature') {
+            candidateKeys.push({ bucket: CONFIG.buckets.CURATED, key: `cases/${caseId}/LONGITUDINAL_PATIENT_NARRATIVE.json`, name: 'LONGITUDINAL_PATIENT_NARRATIVE.json' });
+          } else if (agent.id === 'judge') {
+            candidateKeys.push({ bucket: CONFIG.buckets.CURATED, key: `cases/${caseId}/JUDGE_REPORT.json`, name: 'JUDGE_REPORT.json' });
+          }
+        }
+        for (const cand of candidateKeys) {
+          try {
+            const resp = await s3Client.send(new GetObjectCommand({ Bucket: cand.bucket, Key: cand.key }));
+            const content = await resp.Body.transformToString();
+            const parsed = safeParseJSON(content, content);
+            results[agent.id] = { name: cand.name, data: parsed, raw: typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2), size: content.length };
+            loaded = true;
+            break;
+          } catch {}
         }
       }
     }
@@ -4244,7 +4301,7 @@ const PatientSummaryPage = ({ narrative: initialNarrative, caseData, s3Client, t
   const tabIds_early = ['overview', 'files'];
   if (isPinnacleCase_early) tabIds_early.push('pinnacle');
   else if (isCompassCase_early) tabIds_early.push('compass');
-  else { tabIds_early.push('medications', 'madrigal', 'judge'); }
+  else { tabIds_early.push('medications', 'labs', 'madrigal', 'judge'); }
   tabIds_early.push('export');
 
   useEffect(() => {
@@ -4368,6 +4425,7 @@ const PatientSummaryPage = ({ narrative: initialNarrative, caseData, s3Client, t
     tabs.push({ id: 'compass', label: 'Immunotherapy', icon: Target, badge: hasCompassOutput ? 'emerald' : null });
   } else {
     tabs.push({ id: 'medications', label: 'Medications', icon: Pill });
+    tabs.push({ id: 'labs', label: 'Biomarkers & Labs', icon: TestTube });
     tabs.push({ id: 'judge', label: 'AI Judge', icon: Gauge });
   }
   tabs.push({ id: 'export', label: 'Export Report', icon: Download });
@@ -5063,42 +5121,68 @@ const PatientSummaryPage = ({ narrative: initialNarrative, caseData, s3Client, t
         )}
 
         {/* Key Lab Values */}
-        {keyLabs.length > 0 && (
+        {(keyLabs.length > 0 || (caseData?.dashboard?.lab_tests?.length > 0)) && (
           <div className={cn("rounded-xl border overflow-hidden", t.card)}>
-            <div className={cn("p-4 border-b flex items-center gap-3", t.border)}>
-              <TestTube size={20} className="text-cyan-400" />
-              <h3 className={cn("font-bold", t.text)}>Laboratory Results ({keyLabs.length})</h3>
+            <div className={cn("p-4 border-b flex items-center justify-between gap-3", t.border)}>
+              <div className="flex items-center gap-3">
+                <TestTube size={20} className="text-cyan-400" />
+                <h3 className={cn("font-bold", t.text)}>
+                  Laboratory Biomarkers ({keyLabs.length || caseData?.dashboard?.lab_tests?.length || 0})
+                </h3>
+              </div>
+              <button
+                onClick={() => setActiveTab('labs')}
+                className="text-xs font-bold text-teal-400 hover:text-teal-300 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-500/10 border border-teal-500/20 transition-all hover:bg-teal-500/20"
+              >
+                <span>Full Panel & Reference Gauges</span>
+                <ArrowRight size={14} />
+              </button>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className={t.bgTertiary}>
-                  <tr>
-                    <th className={cn("px-4 py-2 text-left text-xs font-bold uppercase", t.textMuted)}>Test</th>
-                    <th className={cn("px-4 py-2 text-left text-xs font-bold uppercase", t.textMuted)}>Value</th>
-                    <th className={cn("px-4 py-2 text-left text-xs font-bold uppercase", t.textMuted)}>Units</th>
-                    <th className={cn("px-4 py-2 text-left text-xs font-bold uppercase", t.textMuted)}>Status</th>
-                    <th className={cn("px-4 py-2 text-left text-xs font-bold uppercase", t.textMuted)}>Interpretation</th>
-                  </tr>
-                </thead>
-                <tbody className={cn("divide-y", t.border)}>
-                  {keyLabs.map((lab, idx) => (
-                    <tr key={idx} className={t.bgHover}>
-                      <td className={cn("px-4 py-2.5 font-medium text-sm", t.text)}>{safeString(lab.test)}</td>
-                      <td className={cn("px-4 py-2.5 font-mono text-sm", t.text)}>{safeString(lab.value)}</td>
-                      <td className={cn("px-4 py-2.5 text-xs", t.textMuted)}>{safeString(lab.units)}</td>
-                      <td className="px-4 py-2.5">
-                        <span className={cn("text-xs px-2 py-0.5 rounded-full font-bold",
-                          (lab.status || '').toLowerCase() === 'critical' ? "bg-rose-500/20 text-rose-400" :
-                          (lab.status || '').toLowerCase() === 'abnormal' ? "bg-amber-500/20 text-amber-400" :
-                          "bg-emerald-500/20 text-emerald-400"
-                        )}>{safeString(lab.status)}</span>
-                      </td>
-                      <td className={cn("px-4 py-2.5 text-xs", t.textSecondary)}>{safeString(lab.interpretation)}</td>
+            {keyLabs.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className={t.bgTertiary}>
+                    <tr>
+                      <th className={cn("px-4 py-2 text-left text-xs font-bold uppercase", t.textMuted)}>Test</th>
+                      <th className={cn("px-4 py-2 text-left text-xs font-bold uppercase", t.textMuted)}>Value</th>
+                      <th className={cn("px-4 py-2 text-left text-xs font-bold uppercase", t.textMuted)}>Units</th>
+                      <th className={cn("px-4 py-2 text-left text-xs font-bold uppercase", t.textMuted)}>Status</th>
+                      <th className={cn("px-4 py-2 text-left text-xs font-bold uppercase", t.textMuted)}>Interpretation</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody className={cn("divide-y", t.border)}>
+                    {keyLabs.map((lab, idx) => (
+                      <tr key={idx} className={t.bgHover}>
+                        <td className={cn("px-4 py-2.5 font-medium text-sm", t.text)}>{safeString(lab.test || lab.test_name)}</td>
+                        <td className={cn("px-4 py-2.5 font-mono text-sm", t.text)}>{safeString(lab.value)}</td>
+                        <td className={cn("px-4 py-2.5 text-xs", t.textMuted)}>{safeString(lab.units)}</td>
+                        <td className="px-4 py-2.5">
+                          <span className={cn("text-xs px-2 py-0.5 rounded-full font-bold",
+                            (lab.status || '').toLowerCase() === 'critical' ? "bg-rose-500/20 text-rose-400" :
+                            (lab.status || '').toLowerCase() === 'abnormal' ? "bg-amber-500/20 text-amber-400" :
+                            "bg-emerald-500/20 text-emerald-400"
+                          )}>{safeString(lab.status)}</span>
+                        </td>
+                        <td className={cn("px-4 py-2.5 text-xs", t.textSecondary)}>{safeString(lab.interpretation)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="p-4 text-center">
+                <p className={cn("text-xs mb-3", t.textMuted)}>
+                  Complete diagnostic panel with {caseData?.dashboard?.lab_tests?.length || 0} analytes extracted from clinical reports.
+                </p>
+                <button
+                  onClick={() => setActiveTab('labs')}
+                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-teal-500 to-cyan-500 text-white text-xs font-bold inline-flex items-center gap-2 shadow-lg shadow-teal-500/20 hover:opacity-95"
+                >
+                  <TestTube size={14} />
+                  <span>Inspect All {caseData?.dashboard?.lab_tests?.length || 0} Biomarkers</span>
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -5947,6 +6031,7 @@ const PatientSummaryPage = ({ narrative: initialNarrative, caseData, s3Client, t
         {activeTab === 'compass' && <CompassPanel caseData={caseData} theme={theme} />}
         {activeTab === 'pinnacle' && <PinnaclePanel caseData={caseData} theme={theme} />}
         {activeTab === 'medications' && <MedicationsPanel caseData={caseData} narrative={narrative} s3Client={s3Client} theme={theme} onOpenEvidence={(ev) => { setEvidence(ev); }} />}
+        {activeTab === 'labs' && <LabsPanel caseData={caseData} narrative={narrative} s3Client={s3Client} theme={theme} onOpenEvidence={(ev) => { setEvidence(ev); }} />}
         {activeTab === 'madrigal' && <MadrigalPanel caseData={caseData} theme={theme} />}
         {activeTab === 'judge' && <JudgePanel caseData={caseData} activeRunData={activeRunData} theme={theme} />}
         {activeTab === 'export' && <PatientExportPanel narrative={narrative} caseData={caseData} s3Client={s3Client} theme={theme} />}

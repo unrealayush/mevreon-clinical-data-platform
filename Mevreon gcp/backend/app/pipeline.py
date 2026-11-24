@@ -10,7 +10,7 @@ import uuid
 import datetime
 import requests
 from google.auth import default as _default_creds
-from .config import PROJECT, REGION, PIPELINE_JOB, BUCKETS
+from .config import PROJECT, REGION, PIPELINE_JOB, BUCKETS, VERTEX_MODEL, VERTEX_JUDGE_MODEL
 from . import storage
 
 
@@ -58,10 +58,15 @@ def create_run(case_id: str, stage: str = "FULL_PIPELINE") -> dict:
     })
 
     env = [
-        {"name": "RUN_ID",          "value": run_id},
-        {"name": "TARGET_BUCKET",   "value": BUCKETS["RAW"]},
-        {"name": "TARGET_KEY",      "value": f"{case_folder}/__PROCESS__"},
-        {"name": "STAGE",           "value": stage},
+        {"name": "RUN_ID",               "value": run_id},
+        {"name": "TARGET_BUCKET",        "value": BUCKETS["RAW"]},
+        {"name": "TARGET_KEY",           "value": f"{case_folder}/__PROCESS__"},
+        {"name": "STAGE",                "value": stage},
+        {"name": "GOOGLE_CLOUD_PROJECT", "value": PROJECT},
+        {"name": "PROJECT",              "value": PROJECT},
+        {"name": "GCP_REGION",           "value": REGION},
+        {"name": "VERTEX_MODEL",         "value": VERTEX_MODEL},
+        {"name": "VERTEX_JUDGE_MODEL",   "value": VERTEX_JUDGE_MODEL},
     ]
     # ensure the monolith gets all configured bucket names
     for alias, real in BUCKETS.items():

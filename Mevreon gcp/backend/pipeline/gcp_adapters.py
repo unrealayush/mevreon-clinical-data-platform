@@ -51,10 +51,15 @@ for _a, _n in BUCKETS.items():
     os.environ.setdefault(f"BUCKET_{_a}", _n)
 M.Cfg.BUCKETS = {k: os.environ.get(f"BUCKET_{k}", v) for k, v in BUCKETS.items()}
 M.Cfg.REGION = REGION
-M.Cfg.MODEL = os.getenv("VERTEX_MODEL", VERTEX_MODEL)
-M.Cfg.COMPARE_MODEL = os.getenv("VERTEX_COMPARE_MODEL", VERTEX_MODEL)  # single-model path
-M.Cfg.EVAL_JUDGE_MODEL = os.getenv("VERTEX_JUDGE_MODEL", VERTEX_JUDGE_MODEL)
-M.Cfg.EVAL_GEN_MODEL = os.getenv("VERTEX_MODEL", VERTEX_MODEL)
+_raw_vm = os.getenv("VERTEX_MODEL", VERTEX_MODEL).split()[0].strip()
+_clean_vm = "gemini-2.5-pro" if (not _raw_vm or "=" in _raw_vm) else _raw_vm
+_raw_jm = os.getenv("VERTEX_JUDGE_MODEL", VERTEX_JUDGE_MODEL).split()[0].strip()
+_clean_jm = "gemini-2.5-pro" if (not _raw_jm or "=" in _raw_jm) else _raw_jm
+
+M.Cfg.MODEL = _clean_vm
+M.Cfg.COMPARE_MODEL = _clean_vm
+M.Cfg.EVAL_JUDGE_MODEL = _clean_jm
+M.Cfg.EVAL_GEN_MODEL = _clean_vm
 M.Cfg.EVAL_ROLE_ARN = ""  # GCP has no Bedrock eval role -> async judge skipped
 
 
@@ -106,8 +111,10 @@ def _usage(resp):
 
 
 def _gemini_generate(model_id, messages, system, inf):
+    is_json = bool(system and ("json" in system.lower() or "schema" in system.lower()))
     cfg = _gt.GenerateContentConfig(
-        system_instruction=system,
+        system_instruction=system if system else None,
+        response_mime_type="application/json" if is_json else None,
         max_output_tokens=inf.get("maxTokens", M.Cfg.MAX_TOK),
         temperature=inf.get("temperature", M.Cfg.TEMP),
         top_p=inf.get("topP", 0.9),
@@ -141,7 +148,10 @@ def _gemini_image(system, text, images):
         parts.append(_gt.Part.from_text(text=text))
     if not parts:
         parts = [_gt.Part.from_text(text="Analyze the provided content.")]
+    is_json = bool(system and ("json" in system.lower() or "schema" in system.lower()))
     cfg = _gt.GenerateContentConfig(
+        system_instruction=system if system else None,
+        response_mime_type="application/json" if is_json else None,
         max_output_tokens=min(M.Cfg.MAX_TOK, 8192),
         temperature=M.Cfg.TEMP,
         top_p=0.9,
